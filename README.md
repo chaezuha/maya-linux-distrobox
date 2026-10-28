@@ -455,6 +455,26 @@ Apart from distrobox and podman, nothing was installed on the host.
 
 ---
 
+## FAQ
+
+**Can I run Maya on Ubuntu, Arch, Mint or Fedora?** Yes, inside a Rocky Linux 9 container on any distro that has distrobox. Only Fedora Silverblue is tested; see [Other host distros](#other-host-distros).
+
+**Why is the Maya viewport black on Wayland?** Maya 2025 and later don't draw properly on native Wayland. Force XWayland with `QT_QPA_PLATFORM=xcb` (step 9).
+
+**How do I fix `IDSDK 3029: display server not supported`?** The Identity Manager refuses Wayland. Launch with `unset WAYLAND_DISPLAY` and `XDG_SESSION_TYPE=x11`, which `maya-launch` does (step 9).
+
+**Why do I get `ADLSDK_STATUS_LICENSE_CHECKOUT_ERROR` after installing from the RPMs?** The RPM install sets no license method. Set it to `USER` (step 6).
+
+**Do I still need a Maya license?** Yes. You sign in with your normal Autodesk account, as on Windows or macOS.
+
+**Does it work with NVIDIA?** Probably, with `--nvidia`, but it isn't tested here. See [Other host distros](#other-host-distros) for what one tester needed.
+
+**Does this work for Maya 2025 or 2026?** Not tested. The container approach should carry over, but folder names, package layout and the product key differ between versions.
+
+**Does it change my host system?** Only distrobox and podman get installed. Maya stays in the container, and exporting a launcher (step 10) is optional.
+
+---
+
 ## Troubleshooting quick reference
 
 | Symptom | Fix |
