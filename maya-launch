@@ -1,0 +1,84 @@
+#!/bin/sh
+# maya-launch: start Autodesk Maya inside the Rocky Linux 9 distrobox.
+# Automates README steps 4 and 9: refreshes the X cookie, hides Wayland, sets the locale.
+# Install inside the container:  sudo install -m 755 maya-launch /usr/local/bin/
+# If the cookie isn't found automatically:  XAUTHORITY=/run/host<host cookie path> maya-launch
+# For another Maya version, change the path on the last line.
+# Exit codes: 1 = no working X cookie, 2 = setup error.
+
+die() { echo "maya-launch: $*" >&2; exit 2; }
+
+[ -n "$DISPLAY" ] || die "DISPLAY is not set"
+for t in xauth xhost; do
+  command -v "$t" >/dev/null || die "$t is not installed (README step 3)"
+done
+
+AUTH="$HOME/.maya-xauthority"
+uid=$(id -u)
+
+# Try each record of a host cookie file: add its key for $DISPLAY to a fresh file
+# (registering it under the container's hostname) and keep the first one that opens
+# the display. The source is read without locking (-i), and $AUTH is only replaced
+# after a record works. Runs in a subshell: exits 0 when $AUTH was replaced,
+# 1 when no record works, 2 on setup errors.
+try_cookie() (
+  [ -r "$1" ] && [ "$1" != "$AUTH" ] || exit 1
+  entries=$(xauth -i -f "$1" list 2>/dev/null) || exit 1
+  [ -n "$entries" ] || exit 1
+  while read -r _ proto key; do
+    [ -n "$key" ] || continue
+    tmp=$(mktemp "$AUTH.XXXXXX") || die "cannot create a temp file in $HOME"
+    if ! xauth -f "$tmp" add "$DISPLAY" "$proto" "$key" 2>/dev/null; then
+      rm -f "$tmp"
+      die "cannot write $tmp"
+    fi
+    if XAUTHORITY="$tmp" xhost >/dev/null 2>&1; then
+      mv -f "$tmp" "$AUTH" || { rm -f "$tmp"; die "cannot replace $AUTH"; }
+      exit 0
+    fi
+    rm -f "$tmp"
+  done <<EOF
+$entries
+EOF
+  exit 1
+)
+
+# Candidates, best first: $XAUTHORITY (also the manual override), GNOME and KDE
+# XWayland cookies (newest first), the host's ~/.Xauthority on X11 sessions
+status=1
+# shellcheck disable=SC2046  # cookie paths contain no spaces
+for f in "$XAUTHORITY" \
+         $(ls -t /run/user/"$uid"/.mutter-Xwaylandauth.* /run/host/run/user/"$uid"/.mutter-Xwaylandauth.* \
+                 /run/user/"$uid"/xauth_* /run/host/run/user/"$uid"/xauth_* 2>/dev/null) \
+         "${DISTROBOX_HOST_HOME:+$DISTROBOX_HOST_HOME/.Xauthority}"; do
+  try_cookie "$f"
+  status=$?
+  [ "$status" -eq 1 ] || break
+done
+[ "$status" -eq 2 ] && exit 2
+
+# Last resort: the cookie saved by an earlier launch this session
+if [ "$status" -ne 0 ] && ! XAUTHORITY="$AUTH" xhost >/dev/null 2>&1; then
+  echo "maya-launch: no X cookie found that opens $DISPLAY" >&2
+  echo "  Follow README step 4 by hand, or on the host run 'echo \$XAUTHORITY', then:" >&2
+  echo "  XAUTHORITY=/run/host<that path> maya-launch" >&2
+  exit 1
+fi
+export XAUTHORITY="$AUTH"
+# Until logout, this grant also lets any cookie pass the test above; harmless for launching
+xhost +si:localuser:"$USER" >/dev/null || echo "maya-launch: warning: xhost +si:localuser failed" >&2
+
+# Optional legacy X fonts (README step 8)
+if [ -d "$HOME/x11fonts" ]; then
+  xset +fp "$HOME/x11fonts/75dpi,$HOME/x11fonts/100dpi" 2>/dev/null
+  xset fp rehash 2>/dev/null
+fi
+
+# Hide Wayland from Maya and the Identity Manager; Qt draws through XWayland ("xcb")
+unset WAYLAND_DISPLAY
+export XDG_SESSION_TYPE=x11
+export QT_QPA_PLATFORM=xcb
+# LC_ALL overrides any LC_* settings inherited from the host
+export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+
+exec /usr/autodesk/maya2027/bin/maya "$@"
