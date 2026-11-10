@@ -8,7 +8,7 @@ The commands use `$HOME`, `$USER` and `$(id -u)`, so they work for any user. Val
 |---|---|---|
 | Container name | `maya` | Pick any name; use it consistently |
 | Maya home folder | `~/distrobox/maya-home` | Any folder you like |
-| Maya install folder | `/usr/autodesk/maya2027` | Other Maya versions (`ls /usr/autodesk`) |
+| Maya install folder | `/usr/autodesk/maya2027` | Other Maya versions (`ls /usr/autodesk`; `MAYA_VERSION` for `maya-launch`) |
 | Product key / version | `657S1` / `2027.0.0.F` | Other versions (read from `AdskLicensingInstHelper list`) |
 | NVIDIA GPU | not covered by testing | Add `--nvidia` when creating the container |
 
@@ -67,8 +67,7 @@ From step 2 on, everything happens inside the Rocky container and is the same on
 | Part | Fedora Silverblue (tested) | Other distros |
 |---|---|---|
 | Installing distrobox | `rpm-ostree install distrobox` | The distro's package manager (step 1) |
-| Your real home path | `/var/home/$USER` | Usually `/home/$USER`. Only matters for the `distrobox-export --bin` path in step 10 |
-| X cookie file | GNOME: `/run/user/<uid>/.mutter-Xwaylandauth.*` | Other desktops (e.g. KDE) name it differently. Use whatever `echo $XAUTHORITY` prints on the host in step 4. `maya-launch` also checks KDE's `xauth_*` and the host's `~/.Xauthority`, or you can point it at the file (step 9) |
+| X cookie file | GNOME: `/run/user/<uid>/.mutter-Xwaylandauth.*` | Other desktops (e.g. KDE) name it differently. Step 4 uses whatever `echo $XAUTHORITY` prints on the host, and `maya-launch` finds that file itself |
 | X11 session hosts | n/a (Wayland only) | Hiding Wayland is unnecessary but harmless. The cookie file is often `~/.Xauthority` in your real home |
 | NVIDIA | not tested | Use `--nvidia`. A forum tester on Arch/CachyOS also had to install the NVIDIA container toolkit and regenerate its CDI config before the container could see the GPU. Bazzite ships this preconfigured. On Btrfs, they also needed `fuse-overlayfs` for podman |
 | Debian / Ubuntu / Mint | n/a | The same tester reported Mint blocking the container's X/Wayland access. They needed `xhost` and `QT_QPA_PLATFORM=xcb` (both already in `maya-launch`); expect more friction |
@@ -119,8 +118,8 @@ sudo dnf install -y \
   webkit2gtk3 libXpm libxkbfile libxkbcommon-x11 \
   xdg-utils xorg-x11-xauth
 
-# xhost (package name varies; this finds it)
-sudo dnf install -y "$(dnf provides -q '*/bin/xhost' | awk 'NR==1{print $1}')"
+# xhost, plus xset and mkfontdir for step 8 (installed by path; package names vary)
+sudo dnf install -y /usr/bin/xhost /usr/bin/xset /usr/bin/mkfontdir
 ```
 
 Why the extras:
@@ -321,7 +320,7 @@ xset q | grep -A2 "Font Path"    # your x11fonts folders should be listed
 
 - Both folders go in one `xset +fp` argument, separated by a comma. Separating them with a space fails.
 - `bad font path element` means a folder is missing its `fonts.dir` index. Rerun the `mkfontdir` loop.
-- `mkfontdir` and `xset` come from `xorg-x11-font-utils` and `xorg-x11-server-utils`. If the font folders aren't at that path, run `rpm -ql xorg-x11-fonts-ISO8859-1-75dpi | head`.
+- If the font folders aren't at that path, run `rpm -ql xorg-x11-fonts-ISO8859-1-75dpi | head`.
 
 The font path resets on logout. `maya-launch` re-applies it whenever `~/x11fonts` exists.
 
@@ -335,13 +334,13 @@ To launch by hand instead, do step 4, then:
 
 ```bash
 # Inside the container, after doing step 4 (once per login)
-unset WAYLAND_DISPLAY
+unset WAYLAND_DISPLAY QT_QPA_PLATFORMTHEME QT_STYLE_OVERRIDE QT_PLUGIN_PATH QML2_IMPORT_PATH PYTHONHOME
 export XDG_SESSION_TYPE=x11 QT_QPA_PLATFORM=xcb LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 export XAUTHORITY=~/.maya-xauthority
 /usr/autodesk/maya2027/bin/maya
 ```
 
-- `unset WAYLAND_DISPLAY` and `XDG_SESSION_TYPE=x11` hide Wayland from Maya and the Identity Manager, which avoids `IDSDK 3029`.
+- `unset WAYLAND_DISPLAY` and `XDG_SESSION_TYPE=x11` hide Wayland from Maya and the Identity Manager, which avoids `IDSDK 3029`. The other unset variables are host Qt and Python settings that don't fit Maya's bundled copies.
 - `QT_QPA_PLATFORM=xcb` makes Maya's interface draw through X11/XWayland ("xcb" is Qt's X11 backend). This avoids the black viewport.
 - `LANG` and `LC_ALL` force an English locale regardless of your host's settings.
 - If you did step 8, rerun its two `xset` lines after each login too.
@@ -354,7 +353,7 @@ curl -fLo ~/maya-launch https://raw.githubusercontent.com/chaezuha/maya-linux-di
 sudo install -m 755 ~/maya-launch /usr/local/bin/maya-launch
 ```
 
-The script also finds the cookie file on its own, tries each record until one works, and tells you if none does. To point it at a specific cookie file, run `XAUTHORITY=/run/host<host path> maya-launch`. For another Maya version, edit the path on its last line.
+The script also finds the cookie file on its own, tries each record until one works, and tells you if none does. If the container has just started, it waits up to 15 seconds for the licensing service. To force a cookie file, run `XAUTHORITY=<file> maya-launch`. For another Maya version, run `MAYA_VERSION=2026 maya-launch` or change `2027` on its last line.
 
 ---
 
@@ -396,12 +395,11 @@ Maya now shows up in your host's app grid. If the desktop file isn't at that pat
 
 ### Command on the host
 
-This exports `maya-launch` to your real home's `~/.local/bin`. It needs the full path, because `~` inside the container is the Maya home. On Silverblue and other Fedora Atomic desktops your real home is `/var/home/$USER`; on most other distros it's `/home/$USER`.
+This exports `maya-launch` to your real home's `~/.local/bin`. `~` inside the container is the Maya home, so the path uses `$DISTROBOX_HOST_HOME`, which distrobox sets to your real home.
 
-**Edit first:** if you're not on Silverblue, change `/var/home` to `/home`.
 ```bash
 # Inside the container
-distrobox-export --bin /usr/local/bin/maya-launch --export-path /var/home/$USER/.local/bin
+distrobox-export --bin /usr/local/bin/maya-launch --export-path "$DISTROBOX_HOST_HOME/.local/bin"
 ```
 
 When you're done, stop the container (this also stops the licensing service):
@@ -421,11 +419,11 @@ Removing the container deletes Maya and everything installed in it. The Maya hom
 
 First remove the launchers from step 10, if you made any. These run on the host and undo the export inside the container.
 
-**Edit first:** keep only the lines for launchers you made, and use the same `--export-path` as in step 10.
+**Edit first:** keep only the lines for launchers you made.
 ```bash
 # On the host
 distrobox enter maya -- distrobox-export --app /usr/share/applications/maya2027.desktop --delete
-distrobox enter maya -- distrobox-export --bin /usr/local/bin/maya-launch --export-path /var/home/$USER/.local/bin --delete
+distrobox enter maya -- distrobox-export --bin /usr/local/bin/maya-launch --export-path "$HOME/.local/bin" --delete
 ```
 
 Then remove the container. To delete the Maya home folder too:
@@ -479,8 +477,8 @@ Apart from distrobox and podman, nothing was installed on the host.
 
 | Symptom | Fix |
 |---|---|
-| App icon does nothing | Run `maya-launch` in a terminal inside the container to see Maya's startup and licensing errors |
-| `maya-launch: no X cookie found that opens :0` | Do step 4 by hand, or point the script at your cookie: `XAUTHORITY=/run/host<path> maya-launch` |
+| App icon does nothing | Read `~/.maya-launch.log` in the Maya home, or run `maya-launch` in a terminal inside the container, to see Maya's startup and licensing errors |
+| `maya-launch: no X cookie found that opens :0` | Do step 4 by hand, or point the script at your cookie: `XAUTHORITY=<cookie file> maya-launch` |
 | `maya-launch: cannot create/write/replace ...` | The Maya home isn't writable; check its permissions |
 | `Authorization required, but no authorization protocol specified` | Step 4 (cookie + `xhost`) |
 | `xauth: timeout in locking authority file` | `rm -f ~/.Xauthority-c ~/.Xauthority-l` (use the file name from the message) |
